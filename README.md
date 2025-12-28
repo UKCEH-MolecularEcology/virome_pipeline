@@ -1,79 +1,167 @@
 # DiscoVir
 
-written by Lauren Krausfeldt & Poorani Subramanian - bioinformatics@niaid.nih.gov
+written by Lauren Krausfeldt & Poorani Subramanian – bioinformatics@niaid.nih.gov  
+updated by Susheel Bhanu Busi – susbus@ceh.ac.uk (UKCEH)
 
 [Pipeline Training Slides](https://github.com/pooranibcbb/virome-pipeline/releases/download/v0.1/bcbb_viral_metagenomics_2023.pdf)
 
+---
+
 ## Description
 
-This is a pipeline for exploring viruses (ssDNA, dsDNA phage, and giant DNA viruses) and viral diversity in metagenomes. It can be run in the cloud application [Nephele](https://nephele.niaid.nih.gov) (under Explore) or on HPC.  More [details here](https://nephele.niaid.nih.gov/pipeline_details/discovir).
+DiscoVir is a pipeline for exploring viruses (ssDNA, dsDNA phage, and giant DNA viruses)
+and viral diversity in metagenomes. It can be run via the cloud application
+[Nephele](https://nephele.niaid.nih.gov) (under *Explore*) or on HPC systems.
 
-The pipeline accepts metagenomic assembly sequences (.fasta) and binary alignment map (.bam) files of the reads mapped back to the assemblies as input. (These files could be produced from the [WGSA2 pipeline in Nephele](https://nephele.niaid.nih.gov/pipeline_details/wgsa/)<sup>1</sup> ). The output of this pipeline provides viral genomes found in the metagenome assembly, their taxonomy and level of completeness, viral functional genes and their abundances, and vOTU abundances and their host taxonomy. 
+The pipeline accepts:
 
-The pipeline first searchs for viral genomes using geNomad<sup>2</sup>, which also provides viral taxonomy and functional classification of each viral genomes. The viral genomes are also functionally classified with DRAM-v<sup>3</sup> and (optionally) diamond<sup>4</sup> using the nr database. Gene abundances per sample are produced from these outputs using VERSE<sup>5</sup>. From here, the user has the option to filter the resulting sequences based on completeness using CheckV<sup>6</sup>. Either the output of geNomad or CheckV is used to cluster viral genomes with BBTools dedupe<sup>7</sup> and mmseqs<sup>8</sup> to produce vOTUs<sup>9</sup>. Finally, abundances and host taxonomy of vOTUs are produced. 
+- **Metagenomic assembly sequences** (`.fasta`; one per sample)
+- **Binary alignment map files** (`.bam`; reads mapped back to assemblies, one per sample)
 
-### Files
+These files can be produced by workflows such as the
+[WGSA2 pipeline in Nephele](https://nephele.niaid.nih.gov/pipeline_details/wgsa/).
 
-- [_Snakefile_](Snakefile): pipeline script (reads in configs, commands for each pipeline step/rule)
-  - [_cluster_setup.smk_](cluster_setup.smk): helper script for reading in cluster config file
-- [_project_config.yaml_](project_config.yaml): for snakemake `--configfile` option.  config file with details for a specific project - working/input/output directories, path to scripts and other configs, sample names, options for specific rules in the pipeline, etc.
-- [_locus.cluster_config.yaml_](locus.cluster_config.yaml): cluster configuration file for snakemake `--cluster-config` option. specifically for NIAID Locus HPC which uses UGE. (sets parameters for `qsub` command for each rule's job, and which environment modules to use)
-- [_locus_submit_vp.sh_](locus_submit_vp.sh): batch job submit script for running the pipeline on Locus
-- *[scripts](scripts)*: see [scripts README](scripts/README.md)
-- *[docs/README_for_DiscoVir_outputs.md](docs/README_for_DiscoVir_outputs.md)*: explanation of outputs of the pipeline
-- Video: [Viral_Metagenomics_Analysis_subtitled.mp4](https://s3.amazonaws.com/proj-bip-prod-publicread/training/virome-pipeline/Viral_Metagenomics_Analysis_subtitled.mp4)
+The pipeline identifies viral genomes using **geNomad**, annotates viral taxonomy and
+function (geNomad, DRAM-v, optionally DIAMOND), estimates gene abundances with **VERSE**,
+optionally filters genomes using **CheckV**, clusters viral genomes into vOTUs, and
+finally reports vOTU abundances and host taxonomy.
+
+---
+
+## Repository Contents
+
+- `Snakefile` – main pipeline definition
+- `final_Snakefile` – final integrated pipeline Snakefile
+- `config.yaml` – project-specific configuration (paths, options, samples)
+- `cluster_setup.smk` – helper for cluster configuration
+- `scripts/` – helper scripts (see `scripts/README.md`)
+- `docs/README_for_DiscoVir_outputs.md` – detailed description of outputs
+- `scripts/run_pipeline.sh` – convenience wrapper for running on NeoHuxley
+
+---
+
+## Creating the Metadata File
+
+The DiscoVir pipeline expects a **metadata table** describing samples and input file
+locations. This table is typically named `metadata.tsv` and includes assembly and read
+paths for each sample.
+
+### Required format
+
+```text
+Sample_number   Sample      Assembly_Path                                  Read_Path
+1               A21_2022    /path/to/A21_2022.fasta                         /path/to/A21_2022_filtered.R1.fq.gz
+2               A27_2023    /path/to/A27_2023.fasta                         /path/to/A27_2023_filtered.R1.fq.gz
+```
+
+### Generating `metadata.tsv` from a sample list
+
+A helper script (`make_metadata_tsv.py`) can be used to generate this file
+automatically from a simple text file containing one sample ID per line.
+
+#### Example command
+
+```bash
+python make_metadata_tsv.py \
+  --samples 450_samples.txt \
+  --assembly-dir /prj/DECODE/EA_DATA/assembly \
+  --reads-dir /prj/DECODE/rsn_viruses/mvip/reads \
+  --out metadata.tsv
+```
+
+This will:
+
+- Number samples sequentially
+- Construct assembly paths as `{assembly-dir}/{Sample}.fasta`
+- Construct read paths as `{reads-dir}/{Sample}_filtered.R1.fq.gz`
+
+The resulting `metadata.tsv` can then be referenced in `config.yaml`.
+
+---
 
 ## Running the Pipeline
 
 ### Inputs
 
-The inputs to the pipeline are assembled contigs/scaffolds - one fasta file per sample; and bam files of reads aligned to the assemblies - one bam per sample.  They should be located in (or symlinked to) a single directory, and the filenames should start with a unique per-sample name.
+- One assembly FASTA per sample
+- One BAM file (reads mapped to assembly) per sample
+- A `metadata.tsv` file describing samples and input paths
 
-### To run on Locus
+All inputs may be real files or symbolic links.
 
-1. Clone this repo locally:
+---
+
+### Running on NeoHuxley (UKCEH)
+
+The recommended way to run DiscoVir on NeoHuxley is via the provided wrapper script.
+
+#### `scripts/run_pipeline.sh`
+
+```bash
+#!/bin/bash
+
+conda activate /hdd0/susbus/tools/conda_envs/snakemake
+
+snakemake -s final_Snakefile \
+  --configfile config.yaml \
+  --use-conda \
+  --conda-prefix /prj/DECODE/conda_envs \
+  --cores 64 \
+  --jobs 8 \
+  all -rpn -k
 ```
-git clone https://github.com/niaid/virome-pipeline
+
+#### To run
+
+```bash
+cd virome-pipeline
+./scripts/run_pipeline.sh
 ```
 
-2. Copy over the project config file _project_config.yaml_ and submit script _locus_submit_vp.sh_ to your project working directory, and edit both with the details for your specific project.  
-   - for the submit script, the main items to edit are:
-     1. path to the project config file, email address
-     2. the arguments for the `snakemake` command at the bottom of the script (see comments in the script)
+---
 
-   - for the project config, the main items to edit are:
-   
-     - paths to input, output, and working directory and email
-   
-     - pipeline options detailed in the comments of the config file
-   
-       
-   
-3. Submit the job script:
-  ```
-  qsub ./locus_submit_vp.sh
-  ```
+### Running on Locus (NIAID)
 
-4. Success?
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/niaid/virome-pipeline
+   ```
+
+2. Copy and edit:
+   - `project_config.yaml`
+   - `locus_submit_vp.sh`
+
+3. Submit the job:
+   ```bash
+   qsub ./locus_submit_vp.sh
+   ```
+
+---
+
+## Pipeline Overview
 
 ![discovir pipeline diagram](docs/discovir.drawio.svg "DiscoVir Pipeline diagram")
 
+---
+
 ## Notes
 
-- This is tested to run on NIAID's HPC Locus.  However, it would be easy to adapt to another HPC that uses environment modules by making your own cluster config file (with the correct module names and job parameters), and your own job submit script (in particular modifying the `$clustercmd` for whatever job scheduler your HPC uses).
-- In the future, we will work on making it more general (perhaps using conda or a containerized workflow instead of environment modules)
-- Also, adding additional steps for specialized analysis and making the pipeline more flexible.
+- Originally tested on NIAID’s Locus HPC
+- Easily portable to other HPC systems using Snakemake
+- Designed for large-scale viral metagenomic datasets
+- Compatible with containerised or conda-based environments
+
+---
 
 ## References
 
-1. https://www.protocols.io/view/wgsa2-workflow-a-tutorial-n92ldm98xl5b/v1
-2. Camargo, A. P., Roux, S., Schulz, F., Babinski, M., Xu, Y., Hu, B., ... & Kyrpides, N. C. (2023). Identification of mobile genetic elements with geNomad. Nature Biotechnology, 1-10. doi: [10.1038/s41587-023-01953-y](https://doi.org/10.1038/s41587-023-01953-y).
-3. Shaffer, M., Borton, M. A., McGivern, B. B., Zayed, A. A., La Rosa, S. L., Solden, L. M., ... & Wrighton, K. C. (2020). DRAM for distilling microbial metabolism to automate the curation of microbiome function. Nucleic acids research, 48(16), 8883-8900. doi: [10.1093/nar/gkaa621](https://doi.org/10.1093/nar/gkaa621).
-4. Buchfink, B., Reuter, K., & Drost, H. G. (2021). Sensitive protein alignments at tree-of-life scale using DIAMOND. Nature methods, 18(4), 366-368. doi: [10.1038/s41592-021-01101-x](https://doi.org/10.1038/s41592-021-01101-x).
-5. Zhu, Q., Fisher, S. A., Shallcross, J., & Kim, J. (2016). VERSE: a versatile and efficient RNA-Seq read counting tool. bioRxiv, 053306. doi: [10.1101/053306](https://doi.org/10.1101/053306).
-6. Nayfach, S., Camargo, A. P., Schulz, F., Eloe-Fadrosh, E., Roux, S., & Kyrpides, N. C. (2021). CheckV assesses the quality and completeness of metagenome-assembled viral genomes. Nature biotechnology, 39(5), 578-585. doi: [10.1038/s41587-020-00774-7](https://doi.org/10.1038/s41587-020-00774-7).
-7. https://jgi.doe.gov/data-and-tools/software-tools/bbtools/bb-tools-user-guide/dedupe-guide/
-8. Steinegger, M., & Söding, J. (2017). MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets. Nature biotechnology, 35(11), 1026-1028. doi:[10.1038/nbt.3988](https://doi.org/10.1038/nbt.3988).
-9. Roux, S., Adriaenssens, E. M., Dutilh, B. E., Koonin, E. V., Kropinski, A. M., Krupovic, M., ... & Eloe-Fadrosh, E. A. (2019). Minimum information about an uncultivated virus genome (MIUViG). Nature biotechnology, 37(1), 29-37. doi:[10.1038/nbt.4306](https://doi.org/10.1038/nbt.4306).
-10. Shumate, A., & Salzberg, S. L. (2021). Liftoff: Accurate mapping of gene annotations. Bioinformatics, 37(12), 1639–1643. doi: [10.1093/bioinformatics/btaa1016](https://doi.org/10.1093/bioinformatics/btaa1016).
-
+1. WGSA2 workflow tutorial – https://www.protocols.io/view/wgsa2-workflow-a-tutorial-n92ldm98xl5b/v1  
+2. Camargo et al. (2023) *Nature Biotechnology* – geNomad  
+3. Shaffer et al. (2020) *Nucleic Acids Research* – DRAM  
+4. Buchfink et al. (2021) *Nature Methods* – DIAMOND  
+5. Zhu et al. (2016) *bioRxiv* – VERSE  
+6. Nayfach et al. (2021) *Nature Biotechnology* – CheckV  
+7. BBTools dedupe – https://jgi.doe.gov/data-and-tools/software-tools/bbtools/  
+8. Steinegger & Söding (2017) *Nature Biotechnology* – MMseqs2  
+9. Roux et al. (2019) *Nature Biotechnology* – MIUViG  
+10. Shumate & Salzberg (2021) *Bioinformatics* – Liftoff

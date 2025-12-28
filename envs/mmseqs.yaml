@@ -1,0 +1,9 @@
+name: vp_mmseqs
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - mmseqs2
+  - coreutils
+  - sed
+  - grep
+

@@ -1,0 +1,108 @@
+# email: address@nih.gov
+## directory where we clone this repo locally
+scriptdir: /prj/DECODE/rsn_viruses/virome-pipeline
+clusterfile: /prj/DECODE/rsn_viruses/virome-pipeline/locus.cluster_config.yaml
+
+## directories
+workdir: /prj/DECODE/rsn_viruses/mvip
+# these directories are relative to the working directory
+# input directory should have assembly FASTA and bam files.  use full path if the input dir is outside of working directory
+indir: assembly
+outdir: virome_pipeline_output
+
+### rule-specific parameters that could change between projects
+
+#genomad database current location
+genomaddb: /prj/DECODE/rsn_viruses/mvip/00_DATABASES/genomad_db/
+# genomad filtering. options are: default, relaxed, conservative
+# see https://portal.nersc.gov/genomad/post_classification_filtering.html
+genomad_filter: default
+
+# checkv database
+checkvdb: /prj/DECODE/rsn_viruses/mvip/00_DATABASES/checkv-db-v1.5
+# checkv quality sequences to use for clustering vOTUs
+# options are all, medium, high, complete
+checkv_q: all
+
+# min contig length for dramv and vOTU clustering
+vs_min_length: 5000
+
+## amgs
+# run virsorter2 to filter contigs (this removes a lot)
+# and then run the sequences through DRAM-v to identify
+# AMGs
+run_amgs: yes
+
+#iphop
+# Run iPHoP?  yes/no
+# yes significantly increases run time and requires a lot
+# of memory
+run_iphop: no
+# Choose min confidence score. Value between 75 and 100. Default is 90.
+iphop_min_score: 90
+# location of iphop database
+iphopdb: /hpcdata/bio_data/iphop/Sept_2021_pub_rw/
+
+# diamond db to annotate genes for eventual pathway inference - we use nr
+# yes/no
+run_diamond: no
+# location of diamonddb
+diamonddb: /hpcdata/bio_data/DIAMOND_ncbi_db/nr.diamond.dmnd
+
+### input files
+
+# input files are expected to be like {indir}/{sample prefix}{assembly_suffix}
+# change to what makes sense for your data
+assembly_suffix: .fasta
+
+# {indir}/{sample prefix}{bam_suffix}
+bam_suffix: .bam
+
+# optional tab separated mapping file - will be added to  biom file.
+mapping_file:
+
+# sample prefixes to be used throughout pipeline
+samples:
+  - X4_2021
+  - U51_2021
+
+metadata: "metadata.tsv"
+
+dram_db_dir: /prj/DECODE/rsn_viruses/mvip/00_DATABASES
+
+#############################
+# Thread control (NEW)
+#############################
+
+# Optional global fallback (used only if your Snakefile reads this)
+default_threads: 12
+
+# Per-rule threads (override defaults in Snakefile via thr("rule", default))
+threads:
+  createsampledir: 1
+
+  genomad: 16
+  abund_genomad: 12
+
+  checkv: 16
+  checkv_filter: 8
+
+  bbtools_dedupe: 16
+  mmseqs: 24
+
+  votu: 12
+
+  vs4dramv: 20
+  amgs: 16
+  abund_amgs: 12
+
+  dramv: 16
+  abund_dramv: 12
+
+  gene_tables: 6
+  amg_tables: 6
+
+  iphop: 24
+  iphop_abund: 6
+
+  diamond: 24

@@ -1,0 +1,7 @@
+name: vp_diamond
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - diamond
+  - coreutils
+  - sed
+

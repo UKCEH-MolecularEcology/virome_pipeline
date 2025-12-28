@@ -1,0 +1,719 @@
+#############################################
+# Snakefile (conda-per-rule, no envmodules)
+# - rule all is FIRST (default target, no wildcards)
+# - per-rule conda envs live in ./envs/*.yaml
+# - use --conda-prefix /prj/DECODE/conda_envs to create envs there
+#############################################
+
+from os.path import join as pjoin
+import os
+import sys
+import pandas as pd
+
+# --------- conda env folder (relative to Snakefile) ----------
+ENV = "envs"
+
+# --------- config basics ----------
+scriptdir = config["scriptdir"]      # repo/script directory
+workdir: config["workdir"]           # working directory
+
+OUT = config["outdir"]
+SOUT = pjoin(OUT, "{sample}")
+LOGS = pjoin(OUT, "logs")
+IN = config["indir"]
+VOTU_DIR = pjoin(OUT, "vOTUs")
+VOTU_CL_DIR = pjoin(VOTU_DIR, "vOTU_clustering")
+HOST_DIR = pjoin(OUT, "vOTU_Host_prediction_iphop")
+
+# --------- threads (configurable; fallback defaults) ----------
+T = config.get("threads", {})
+def thr(name, default):
+    return int(T.get(name, default))
+
+# --------- inputs (metadata-driven samples) ----------
+meta_fp = config.get("metadata")
+if meta_fp is None:
+    sys.exit("Config key 'metadata' is required")
+
+meta = pd.read_csv(meta_fp, sep="\t")
+if "Sample" not in meta.columns:
+    sys.exit("Column 'Sample' not found in metadata file")
+
+SAMPLES = meta["Sample"].astype(str).tolist()
+if not SAMPLES:
+    sys.exit("No samples found in metadata")
+
+# --------- optional features ----------
+RUN_DIAMOND = bool(config.get("run_diamond", False))
+RUN_IPHOP = bool(config.get("run_iphop", False))
+RUN_AMGS = bool(config.get("run_amgs", False))
+
+# --------- diamond db validation ----------
+if RUN_DIAMOND:
+    if ("diamonddb" not in config) or (config["diamonddb"] is None):
+        raise ValueError("run_diamond is true, but config['diamonddb'] is not specified")
+    DIAMOND_DB_NAME = os.path.splitext(os.path.basename(config["diamonddb"]))[0]
+else:
+    DIAMOND_DB_NAME = None
+
+# ---------------- RULES -----------------
+
+localrules: all, createsampledir
+
+# IMPORTANT: keep rule all FIRST so Snakemake uses it as default target
+rule all:
+    input:
+        GENOMADALL      = expand(pjoin(SOUT, "genomad", "{sample}_summary", "{sample}_virus.fna"), sample=SAMPLES),
+        CHECKVALL       = expand(pjoin(SOUT, "checkv", "checkv_filtered_genomad_viruses.fna"), sample=SAMPLES),
+        VERSEGALL       = expand(pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus.count.CDS.cpm.txt"), sample=SAMPLES),
+        BBTOOLS_DEDUPE  = pjoin(VOTU_CL_DIR, "bbtools_dedupe", "unique_seqs.fasta"),
+        MMSEQSALL       = pjoin(VOTU_CL_DIR, "mmseqs", "representative_seqs.fasta"),
+        VOTUALL         = pjoin(VOTU_DIR, "vOTU_table_cpm.tsv"),
+        IPHOPALL        = pjoin(HOST_DIR, "Host_prediction_to_genus_m75.csv") if RUN_IPHOP else [],
+        DIAMALL         = expand(pjoin(SOUT, "diamond", "{sample}." + DIAMOND_DB_NAME + ".tsv"), sample=SAMPLES) if RUN_DIAMOND else [],
+        DRAMVALL        = expand(pjoin(SOUT, "dramv", "dramv-annotate", "genes.gff"), sample=SAMPLES),
+        VS4DRAMVALL     = expand(pjoin(SOUT, "amgs/vs2/for-dramv/final-viral-combined-for-dramv.fa"), sample=SAMPLES) if RUN_AMGS else [],
+        AMGSALL         = expand(pjoin(SOUT, "amgs", "dramv-annotate", "genes.gff"), sample=SAMPLES) if RUN_AMGS else [],
+        VERSEDALL       = expand(pjoin(SOUT, "dramv", "abund_dramv", "{sample}_dramv.count.gene.cpm.txt"), sample=SAMPLES),
+        GENETABLESALL   = pjoin(OUT, "gene_tables", "dramv_vogdb_hits_cpm.tsv"),
+        VERSEAMGSALL    = expand(pjoin(SOUT, "amgs", "abund_amgs", "{sample}_amgs.count.gene.cpm.txt"), sample=SAMPLES) if RUN_AMGS else [],
+        AMGTABLESALL    = pjoin(OUT, "gene_tables", "amg_cpm.tsv") if RUN_AMGS else [],
+        IPHOPABUND      = pjoin(HOST_DIR, "Host.krona.html") if RUN_IPHOP else []
+
+rule createsampledir:
+    """setup output directories"""
+    output:
+        pjoin(SOUT, "logs/snakefake")
+    params:
+        outdir = SOUT
+    shell:
+        r"""
+        mkdir -p {params.outdir}/logs
+        touch {output}
+        """
+
+# ---------------- geNomad ----------------
+genomad_filter = {
+    "default": "",
+    "relaxed": "--relaxed",
+    "conservative": "--conservative"
+}
+
+rule genomad:
+    threads: thr("genomad", 16)
+    conda: pjoin(ENV, "genomad.yaml")
+    input:
+        fake = ancient(rules.createsampledir.output),
+        assembly = pjoin(IN, "{sample}" + config["assembly_suffix"])
+    params:
+        outdir = pjoin(SOUT, "genomad"),
+        renamed_assembly = pjoin(SOUT, "genomad", "{sample}.fasta"),
+        genomad_filter = lambda wc: genomad_filter[config["genomad_filter"]]
+    log:
+        pjoin(SOUT, "genomad", "{sample}.genomad.log")
+    output:
+        fna = pjoin(SOUT, "genomad", "{sample}_summary", "{sample}_virus.fna"),
+        genes = pjoin(SOUT, "genomad", "{sample}_summary", "{sample}_virus_genes.tsv"),
+        proteins = pjoin(SOUT, "genomad", "{sample}_summary", "{sample}_virus_proteins.faa"),
+        summary = pjoin(SOUT, "genomad", "{sample}_summary", "{sample}_virus_summary.tsv"),
+        assembly_headermap = pjoin(SOUT, "genomad", "{sample}_assembly_headermap.txt")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        genomad --version >> {log} 2>&1
+
+        renamed_assembly=$(realpath {params.renamed_assembly})
+
+        sed '/^>/ s!\([^ ]*\)!\1_{wildcards.sample}!' < {input.assembly} > $renamed_assembly
+
+        grep -e "^>" {input.assembly} | sed -r 's/^.{{1}}//' > {params.outdir}/oldheaders.txt
+        grep -e "^>" $renamed_assembly | sed -r 's/^.{{1}}//' > {params.outdir}/newheaders.txt
+        paste {params.outdir}/oldheaders.txt {params.outdir}/newheaders.txt > {output.assembly_headermap}
+        rm {params.outdir}/oldheaders.txt {params.outdir}/newheaders.txt
+
+        echo "Looking for viruses in {wildcards.sample} using geNomad." >> {log}
+
+        genomad end-to-end {params.genomad_filter} --enable-score-calibration --cleanup \
+            --threads {threads} $renamed_assembly {params.outdir} {config[genomaddb]} >> {log} 2>&1
+
+        rm $renamed_assembly
+        """
+
+# -------------- abundances from geNomad (VERSE) --------------
+rule abund_genomad:
+    threads: thr("abund_genomad", 12)
+    conda: pjoin(ENV, "verse.yaml")
+    input:
+        genes = rules.genomad.output.genes,
+        fna = rules.genomad.output.fna,
+        virus = rules.genomad.output.summary,
+        headermap = rules.genomad.output.assembly_headermap,
+        bam = ancient(pjoin(IN, "{sample}" + config["bam_suffix"]))
+    params:
+        outdir = pjoin(SOUT, "genomad", "abund_genomad"),
+        prefix_genes = pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus_genes.count"),
+        counts_only_genes = pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus_genes.count.CDS.txt"),
+        prefix_virus = pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus.count"),
+        counts_only_virus = pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus.count.CDS.txt")
+    log:
+        pjoin(SOUT, "genomad", "abund_genomad", "{sample}.abund_genomad.log")
+    output:
+        readcounts_genes = pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus_genes.count.CDS.cpm.txt"),
+        readcounts_virus = pjoin(SOUT, "genomad", "abund_genomad", "{sample}_virus.count.CDS.cpm.txt")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        verse -v >> {log} 2>&1
+
+        python3 {config[scriptdir]}/scripts/genomad_genes2gff.py {input.genes} -m {input.headermap} > {params.prefix_genes}.gff
+        verse -a {params.prefix_genes}.gff -o {params.prefix_genes} -g ID -z 1 -t CDS -l -T {threads} {input.bam} >> {log} 2>&1
+        python3 {config[scriptdir]}/scripts/calc_cpm.py {params.counts_only_genes} > {output.readcounts_genes}
+
+        python3 {config[scriptdir]}/scripts/genomad_virus2gff.py {input.virus} -m {input.headermap} > {params.prefix_virus}.gff
+        verse -a {params.prefix_virus}.gff -o {params.prefix_virus} -g ID -z 1 -t CDS -l -T {threads} {input.bam} >> {log} 2>&1
+        python3 {config[scriptdir]}/scripts/calc_cpm.py {params.counts_only_virus} > {output.readcounts_virus}
+        """
+
+# ---------------- checkV ----------------
+rule checkv:
+    threads: thr("checkv", 16)
+    conda: pjoin(ENV, "checkv.yaml")
+    input:
+        rules.genomad.output.fna
+    params:
+        outdir = pjoin(SOUT, "checkv")
+    log:
+        pjoin(SOUT, "checkv", "{sample}.checkv.log")
+    output:
+        fna = pjoin(SOUT, "checkv", "combined.fna"),
+        qsum = pjoin(SOUT, "checkv", "quality_summary.tsv")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        checkv | head -n1 >> {log} 2>&1
+
+        checkv end_to_end {input} {params.outdir} -d {config[checkvdb]} -t {threads} --quiet >> {log} 2>&1
+
+        cat {params.outdir}/proviruses.fna {params.outdir}/viruses.fna > {output.fna}
+        """
+
+def checkv_q_validate(checkv_q):
+    if checkv_q not in ["all", "medium", "high", "complete"]:
+        raise ValueError(f"checkv_q in config is '{checkv_q}' but must be one of all/medium/high/complete")
+    return checkv_q
+
+rule checkv_filter:
+    threads: thr("checkv_filter", 8)
+    conda: pjoin(ENV, "seqtk.yaml")
+    input:
+        fna = rules.genomad.output.fna,
+        qsum = rules.checkv.output.qsum
+    params:
+        outdir = pjoin(SOUT, "checkv"),
+        checkv_q = lambda wc: checkv_q_validate(config["checkv_q"]),
+        tempclist = pjoin(SOUT, "checkv", "tempclist.txt"),
+        quality = pjoin(SOUT, "checkv", "checkv_quality_genomad_viruses.fna")
+    output:
+        pjoin(SOUT, "checkv", "checkv_filtered_genomad_viruses.fna")
+    shell:
+        r"""
+        rm -f {output}
+
+        if [ "{params.checkv_q}" = "complete" ]; then
+            grep -e "Complete" {input.qsum} | awk '{{ print $1 }}' > {params.tempclist}
+        elif [ "{params.checkv_q}" = "high" ]; then
+            grep -e "Complete" -e "High-quality" {input.qsum} | awk '{{ print $1 }}' > {params.tempclist}
+        elif [ "{params.checkv_q}" = "medium" ]; then
+            grep -e "Complete" -e "High-quality" -e "Medium-quality" {input.qsum} | awk '{{ print $1 }}' > {params.tempclist}
+        fi
+
+        if [ "{params.checkv_q}" != "all" ]; then
+            seqtk subseq {input.fna} {params.tempclist} > {params.outdir}/temp && mv {params.outdir}/temp {params.quality}
+            rm -fv {params.tempclist}
+        else
+            cp {input.fna} {params.quality}
+        fi
+
+        seqtk seq -L {config[vs_min_length]} {params.quality} > {output}
+        """
+
+# ---------------- bbtools dedupe ----------------
+rule bbtools_dedupe:
+    threads: thr("bbtools_dedupe", 16)
+    conda: pjoin(ENV, "bbmap.yaml")
+    input:
+        expand(rules.checkv_filter.output, sample=SAMPLES)
+    params:
+        outdir = pjoin(VOTU_CL_DIR, "bbtools_dedupe"),
+        input_ctgs = pjoin(VOTU_CL_DIR, "bbtools_dedupe", "all_input_contigs.fasta"),
+        stats = pjoin(VOTU_CL_DIR, "bbtools_dedupe", "cluster_stats.txt")
+    log:
+        pjoin(VOTU_CL_DIR, "bbtools_dedupe", "bbtools_dedupe.log")
+    output:
+        unique_seqs = pjoin(VOTU_CL_DIR, "bbtools_dedupe", "unique_seqs.fasta")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        dedupe.sh --version >> {log} 2>&1
+
+        cat {input} > {params.input_ctgs}
+
+        dedupe.sh in={params.input_ctgs} out={output.unique_seqs} csf={params.stats} \
+            minscaf={config[vs_min_length]} mergenames=t ex=f usejni=t threads={threads} >> {log} 2>&1
+        """
+
+# ---------------- mmseqs clustering ----------------
+rule mmseqs:
+    threads: thr("mmseqs", 24)
+    conda: pjoin(ENV, "mmseqs.yaml")
+    input:
+        rules.bbtools_dedupe.output.unique_seqs
+    params:
+        outdir = pjoin(VOTU_CL_DIR, "mmseqs"),
+        DB_dir = pjoin(VOTU_CL_DIR, "mmseqs", "DB"),
+        DB = pjoin(VOTU_CL_DIR, "mmseqs", "DB/DB"),
+        DB_clu = pjoin(VOTU_CL_DIR, "mmseqs", "DB/DB_clu"),
+        DB_clu_seq = pjoin(VOTU_CL_DIR, "mmseqs", "DB/DB_clu_seq"),
+        DB_clu_fasta = pjoin(VOTU_CL_DIR, "mmseqs", "cluster_seqs.fasta"),
+        DB_clu_rep = pjoin(VOTU_CL_DIR, "mmseqs", "DB/DB_clu_rep")
+    log:
+        pjoin(VOTU_CL_DIR, "mmseqs", "mmseqs2.log")
+    output:
+        DB_clu_rep_fasta = pjoin(VOTU_CL_DIR, "mmseqs", "representative_seqs.fasta"),
+        DB_clu_tsv = pjoin(VOTU_CL_DIR, "mmseqs", "DB_clu.tsv"),
+        flat_DB_clu_tsv = pjoin(VOTU_CL_DIR, "mmseqs", "flat_DB_clu.tsv"),
+        renamed_DB_clu_rep_fasta = pjoin(VOTU_CL_DIR, "mmseqs", "representative_seqs.renamed.fasta"),
+        vOTU_fasta = pjoin(VOTU_DIR, "vOTU_sequences.fasta")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+        mkdir -p {params.DB_dir}
+
+        mmseqs version >> {log} 2>&1
+
+        mmseqs createdb {input} {params.DB} >> {log} 2>&1
+
+        mmseqs cluster {params.DB} {params.DB_clu} $TMPDIR --cov-mode 1 -c 0.85 \
+            --min-seq-id 0.95 --cluster-mode 2 --threads {threads} >> {log} 2>&1
+
+        mmseqs createtsv {params.DB} {params.DB} {params.DB_clu} {output.DB_clu_tsv} \
+            --threads {threads} >> {log} 2>&1
+
+        mmseqs createseqfiledb {params.DB} {params.DB_clu} {params.DB_clu_seq} \
+            --threads {threads} >> {log} 2>&1
+
+        mmseqs result2flat {params.DB} {params.DB} {params.DB_clu_seq} \
+            {params.DB_clu_fasta} >> {log} 2>&1
+
+        mmseqs createsubdb {params.DB_clu} {params.DB} {params.DB_clu_rep} >> {log} 2>&1
+        mmseqs convert2fasta {params.DB_clu_rep} {output.DB_clu_rep_fasta} >> {log} 2>&1
+
+        python3 {config[scriptdir]}/scripts/flatten_mmseqs_tsv.py {output.DB_clu_tsv} | sort -u > {output.flat_DB_clu_tsv}
+        sed '/^>/ s!>[^>]*!!2g' {output.DB_clu_rep_fasta} > {output.renamed_DB_clu_rep_fasta}
+
+        mkdir -p {VOTU_DIR}
+        cp {output.renamed_DB_clu_rep_fasta} {output.vOTU_fasta}
+        """
+
+# ---------------- vOTU table + biom + krona ----------------
+rule votu:
+    threads: thr("votu", 12)
+    conda: pjoin(ENV, "votu.yaml")
+    input:
+        mmseqs = rules.mmseqs.output.flat_DB_clu_tsv,
+        abund = expand(rules.abund_genomad.output.readcounts_virus, sample=SAMPLES),
+        summ = expand(rules.genomad.output.summary, sample=SAMPLES)
+    params:
+        outdir = pjoin(VOTU_DIR),
+        filelist = pjoin(VOTU_DIR, "abundfiles.txt"),
+        summlist = pjoin(VOTU_DIR, "summaryfiles.txt"),
+        mapping = config.get("mapping_file", "None"),
+        obs_met = pjoin(VOTU_DIR, "obs_met.tsv"),
+        tempbiom = pjoin(VOTU_DIR, "temp.biom")
+    output:
+        votu = pjoin(VOTU_DIR, "vOTU_table_cpm.tsv"),
+        gmdanno = pjoin(VOTU_DIR, "vOTUs_genomad_virus_summary.tsv"),
+        biom = pjoin(VOTU_DIR, "vOTU_cpm.biom")
+    shell:
+        r"""
+        rm -f {output.votu} {output.gmdanno} {params.filelist} {params.summlist} {params.obs_met} {params.tempbiom}
+        mkdir -p {params.outdir}
+
+        echo "{input.abund}" > {params.filelist}
+        tr " " "\n" < {params.filelist} > {params.outdir}/temp && mv {params.outdir}/temp {params.filelist}
+
+        python3 {config[scriptdir]}/scripts/make_votu_table.py -v cpm {input.mmseqs} {params.filelist} > {output.votu}
+
+        echo "{input.summ}" | tr " " "\n" > {params.summlist}
+        python3 {config[scriptdir]}/scripts/repseq_genomad_annotations.py {output.votu} {params.summlist} > {output.gmdanno}
+
+        mkdir -p {params.outdir}/temp1
+        python3 {config[scriptdir]}/scripts/format_genomad_and_votu_for_krona.py {output.votu} {output.gmdanno} {params.outdir}/temp1
+        ktImportText -o {params.outdir}/vOTU.krona.html {params.outdir}/temp1/*.txt
+
+        sed '0,/seq_name/{{s/seq_name/\#repseq/}}' {output.gmdanno} | awk -F $'\t' '{{ print $1"\t"$11 }}' > {params.obs_met}
+
+        biom convert -i {output.votu} -o {params.tempbiom} --to-json --table-type "OTU table"
+        biom add-metadata -i {params.tempbiom} -o {output.biom} --observation-metadata-fp {params.obs_met} \
+            --sc-separated taxonomy --output-as-json
+
+        if [ "{params.mapping}" != "None" ]; then
+            biom add-metadata -i {output.biom} -o {params.tempbiom} --sample-metadata-fp {params.mapping} --output-as-json
+            mv {params.tempbiom} {output.biom}
+        fi
+
+        rm -f {params.filelist} {params.summlist} {params.obs_met} {params.tempbiom}
+        rm -rf {params.outdir}/temp1
+        """
+
+# ---------------- VirSorter2 for AMGs ----------------
+rule vs4dramv:
+    threads: thr("vs4dramv", 20)
+    conda: pjoin(ENV, "virsorter.yaml")
+    input:
+        rules.checkv_filter.output
+    params:
+        outdir = pjoin(SOUT, "amgs", "vs2")
+    log:
+        pjoin(SOUT, "amgs/vs2", "{sample}.vs2.log")
+    output:
+        fasta = pjoin(SOUT, "amgs/vs2/for-dramv/final-viral-combined-for-dramv.fa"),
+        tab = pjoin(SOUT, "amgs/vs2/for-dramv/viral-affi-contigs-for-dramv.tab")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        virsorter --version >> {log} 2>&1
+
+        virsorter run --seqname-suffix-off --viral-gene-enrich-off --provirus-off \
+            --prep-for-dramv -i {input} -w {params.outdir} --include-groups dsDNAphage,ssDNA,NCLDV \
+            --min-length {config[vs_min_length]} --min-score 0.5 --rm-tmpdir -j {threads} all >> {log} 2>&1
+        """
+
+# ---------------- DRAM-v (AMGs) ----------------
+rule dram_prepare_db:
+    """
+    Prepare DRAM databases (one-time setup)
+    """
+    conda: pjoin(ENV, "dramv.yaml")
+    output:
+        flag = pjoin(config["dram_db_dir"], ".dram_db_ready")
+    params:
+        dbdir = config["dram_db_dir"]
+    log:
+        pjoin(LOGS, "dram_prepare_db.log")
+    shell:
+        r"""
+        mkdir -p {params.dbdir}
+
+        DRAM-setup.py prepare_databases \
+            --output_dir {params.dbdir} >> {log} 2>&1
+
+        touch {output.flag}
+        """
+
+rule amgs:
+    threads: thr("amgs", 16)
+    conda: pjoin(ENV, "dramv.yaml")
+    input:
+        fasta = rules.vs4dramv.output.fasta,
+        tab = rules.vs4dramv.output.tab,
+        db_ready = rules.dram_prepare_db.output.flag
+    params:
+        annot_outdir = pjoin(SOUT, "amgs", "dramv-annotate"),
+        distill_outdir = pjoin(SOUT, "amgs", "dramv-distill"),
+        amgs_root = pjoin(SOUT, "amgs")
+    log:
+        pjoin(SOUT, "amgs", "{sample}.dramv_amgs.log")
+    output:
+        genes = pjoin(SOUT, "amgs/dramv-annotate/genes.faa"),
+        gff = pjoin(SOUT, "amgs/dramv-annotate/genes.gff"),
+        summary = pjoin(SOUT, "amgs/dramv-distill/amg_summary.tsv"),
+        scaffolds = pjoin(SOUT, "amgs", "dramv-annotate", "scaffolds.fna")
+    shell:
+        r"""
+        rm -rf {params.annot_outdir} {params.distill_outdir}
+        mkdir -p {params.amgs_root}
+
+        DRAM-setup.py version >> {log} 2>&1
+
+        DRAM-v.py annotate -i {input.fasta} -v {input.tab} -o {params.annot_outdir} --skip_trnascan \
+            --threads {threads} --min_contig_size {config[vs_min_length]} >> {log} 2>&1
+
+        DRAM-v.py distill -i {params.annot_outdir}/annotations.tsv -o {params.distill_outdir} --log_file_path {log} >> {log} 2>&1
+        """
+
+# ---------------- liftoff + verse (AMGs abund) ----------------
+rule abund_amgs:
+    threads: thr("abund_amgs", 12)
+    conda: pjoin(ENV, "liftoff_verse.yaml")
+    input:
+        gff = rules.amgs.output.gff,
+        target = pjoin(IN, "{sample}" + config["assembly_suffix"]),
+        reference = pjoin(SOUT, "amgs", "dramv-annotate", "scaffolds.fna"),
+        bam = ancient(pjoin(IN, "{sample}" + config["bam_suffix"]))
+    log:
+        pjoin(SOUT, "amgs", "abund_amgs", "{sample}.abund_amgs.log")
+    params:
+        outdir = pjoin(SOUT, "amgs", "abund_amgs"),
+        intermdir = pjoin(SOUT, "amgs", "abund_amgs", "intermediate_files"),
+        prefix_genes = pjoin(SOUT, "amgs", "abund_amgs", "{sample}_amgs.count"),
+        counts_only_genes = pjoin(SOUT, "amgs", "abund_amgs", "{sample}_amgs.count.gene.txt"),
+        liftoff_gff = pjoin(SOUT, "amgs", "abund_amgs", "{sample}.amgs_genes.liftoff.gff")
+    output:
+        readcounts_genes = pjoin(SOUT, "amgs", "abund_amgs", "{sample}_amgs.count.gene.cpm.txt")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.intermdir}
+
+        grep -v -w "##gff-version" {input.gff} | grep -v -e "^#" | awk '{{ print $1 }}' | sort -u > {params.intermdir}/1.txt
+        cat {params.intermdir}/1.txt | sed "s/\(.*\)_{wildcards.sample}.*/\1/" > {params.intermdir}/2.txt
+        paste -d "," {params.intermdir}/1.txt {params.intermdir}/2.txt | sort -u > {params.intermdir}/chroms.txt
+
+        sed $'s/\tCDS\t/\tgene\t/' < {input.gff} > {params.intermdir}/temp.gff
+
+        liftoff {input.target} {input.reference} -g {params.intermdir}/temp.gff -o {params.liftoff_gff} \
+            -u {params.outdir}/unmapped_features.txt -dir {params.outdir}/intermediate_files -p 1 \
+            -chroms {params.intermdir}/chroms.txt -exclude_partial -a 0.9 >> {log} 2>&1
+
+        sed 's/\"//g' {params.liftoff_gff} > {params.outdir}/temp.liftoff.gff && mv {params.outdir}/temp.liftoff.gff {params.liftoff_gff}
+
+        verse -a {params.liftoff_gff} -o {params.prefix_genes} -g ID -z 1 -t gene -l -T {threads} {input.bam} >> {log} 2>&1
+
+        python3 {config[scriptdir]}/scripts/calc_cpm.py {params.counts_only_genes} > {output.readcounts_genes}
+
+        rm -f {params.counts_only_genes}
+        rm -rf {params.intermdir}
+        """
+
+# ---------------- DRAM-v (functional annotation) ----------------
+rule dramv:
+    threads: thr("dramv", 16)
+    conda: pjoin(ENV, "dramv.yaml")
+    input:
+        fasta = rules.checkv_filter.output,
+        db_ready = rules.dram_prepare_db.output.flag
+    params:
+        outdir = pjoin(SOUT, "dramv")
+    log:
+        pjoin(SOUT, "dramv", "{sample}.dramv.log")
+    output:
+        genes = pjoin(SOUT, "dramv/dramv-annotate/genes.faa"),
+        gff = pjoin(SOUT, "dramv/dramv-annotate/genes.gff"),
+        scaffolds = pjoin(SOUT, "dramv/dramv-annotate/scaffolds.fna")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        DRAM-setup.py version >> {log} 2>&1
+
+        DRAM-v.py annotate -i {input.fasta} -o {params.outdir}/dramv-annotate --skip_trnascan \
+            --threads {threads} --min_contig_size {config[vs_min_length]} >> {log} 2>&1
+        """
+
+# ---------------- liftoff + verse (DRAM-v genes abund) ----------------
+rule abund_dramv:
+    threads: thr("abund_dramv", 12)
+    conda: pjoin(ENV, "liftoff_verse.yaml")
+    input:
+        gff = rules.dramv.output.gff,
+        target = pjoin(IN, "{sample}" + config["assembly_suffix"]),
+        reference = rules.dramv.output.scaffolds,
+        bam = ancient(pjoin(IN, "{sample}" + config["bam_suffix"])),
+        db_ready = rules.dram_prepare_db.output.flag
+    params:
+        outdir = pjoin(SOUT, "dramv", "abund_dramv"),
+        intermdir = pjoin(SOUT, "dramv", "abund_dramv", "intermediate_files"),
+        prefix_genes = pjoin(SOUT, "dramv", "abund_dramv", "{sample}_dramv.count"),
+        counts_only_genes = pjoin(SOUT, "dramv", "abund_dramv", "{sample}_dramv.count.gene.txt"),
+        liftoff_gff = pjoin(SOUT, "dramv", "abund_dramv", "{sample}.dramv_genes.liftoff.gff")
+    log:
+        pjoin(SOUT, "dramv", "abund_dramv", "{sample}.abund_dramv.log")
+    output:
+        readcounts_genes = pjoin(SOUT, "dramv", "abund_dramv", "{sample}_dramv.count.gene.cpm.txt")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.intermdir}
+
+        grep -v -w "##gff-version" {input.gff} | grep -v -e "^#" | awk '{{ print $1 }}' > {params.intermdir}/1.txt
+        cat {params.intermdir}/1.txt | sed 's/|.*//' | sed "s/\(.*\)_{wildcards.sample}.*/\1/" > {params.intermdir}/2.txt
+        paste -d "," {params.intermdir}/1.txt {params.intermdir}/2.txt | sort -u > {params.intermdir}/chroms.txt
+
+        sed $'s/\tCDS\t/\tgene\t/' < {input.gff} > {params.intermdir}/temp.gff
+
+        liftoff {input.target} {input.reference} -g {params.intermdir}/temp.gff -o {params.liftoff_gff} \
+            -u {params.outdir}/unmapped_features.txt -dir {params.intermdir} -p 1 \
+            -chroms {params.intermdir}/chroms.txt -exclude_partial -a 0.9 >> {log} 2>&1
+
+        sed 's/\"//g' {params.liftoff_gff} > {params.outdir}/temp.liftoff.gff && mv {params.outdir}/temp.liftoff.gff {params.liftoff_gff}
+
+        verse -a {params.liftoff_gff} -o {params.prefix_genes} -g ID -z 1 -t gene -l -T {threads} {input.bam} >> {log} 2>&1
+
+        python3 {config[scriptdir]}/scripts/calc_cpm.py {params.counts_only_genes} > {output.readcounts_genes}
+
+        rm -f {params.counts_only_genes}
+        rm -rf {params.intermdir}
+        """
+
+# ---------------- gene tables (plotnine heatmaps etc.) ----------------
+rule gene_tables:
+    threads: thr("gene_tables", 6)
+    conda: pjoin(ENV, "tables.yaml")
+    input:
+        abund = expand(rules.abund_dramv.output.readcounts_genes, sample=SAMPLES)
+    params:
+        outdir = pjoin(OUT, "gene_tables"),
+        samp = SAMPLES,
+        samplelist = pjoin(OUT, "gene_tables", "samplelist.txt"),
+        workingdir = OUT,
+        top_vogids = pjoin(OUT, "gene_tables", "top_dramv_vogdb_hits_cpm.tsv"),
+        vogdb_heatmap = pjoin(OUT, "gene_tables", "dramv_vogdb_heatmap_cpm")
+    output:
+        pfam = pjoin(OUT, "gene_tables", "dramv_pfam_hits_cpm.tsv"),
+        vogdb = pjoin(OUT, "gene_tables", "dramv_vogdb_hits_cpm.tsv"),
+        kofam = pjoin(OUT, "gene_tables", "dramv_kofam_hits_cpm.tsv")
+    shell:
+        r"""
+        rm -f {output.pfam} {output.vogdb} {output.kofam}
+        mkdir -p {params.outdir}
+
+        echo "{params.samp}" > {params.samplelist}
+        tr " " "\n" < {params.samplelist} > {params.outdir}/temp && mv {params.outdir}/temp {params.samplelist}
+
+        python3 {config[scriptdir]}/scripts/dramv_genes_table.py {params.workingdir} {params.samplelist} -v cpm -c pfam_hits > {output.pfam}
+        python3 {config[scriptdir]}/scripts/dramv_genes_table.py {params.workingdir} {params.samplelist} -v cpm -c ko_id -c kegg_hit > {output.kofam}
+        python3 {config[scriptdir]}/scripts/dramv_genes_table.py {params.workingdir} {params.samplelist} -v cpm -c vogdb_id -c vogdb_hits > {output.vogdb}
+
+        python3 {config[scriptdir]}/scripts/top_genes.py {output.vogdb} -i "vogdb_hits" -m prev -n 25 > {params.top_vogids}
+        python3 {config[scriptdir]}/scripts/plotnine_heatmap.py {params.top_vogids} {params.vogdb_heatmap} \
+            -t "Top VOG genes" -d "vogdb_hits" -a "cpm"
+        """
+
+rule amg_tables:
+    threads: thr("amg_tables", 6)
+    conda: pjoin(ENV, "tables.yaml")
+    input:
+        amgs = expand(rules.abund_amgs.output.readcounts_genes, sample=SAMPLES)
+    params:
+        outdir = pjoin(OUT, "gene_tables"),
+        samp = SAMPLES,
+        samplelist = pjoin(OUT, "gene_tables", "amg_samplelist.txt"),
+        workingdir = OUT,
+        amg_heatmap = pjoin(OUT, "gene_tables", "amg_heatmap_cpm")
+    output:
+        amgs = pjoin(OUT, "gene_tables", "amg_cpm.tsv")
+    shell:
+        r"""
+        rm -f {output.amgs}
+        mkdir -p {params.outdir}
+
+        echo "{params.samp}" > {params.samplelist}
+        tr " " "\n" < {params.samplelist} > {params.outdir}/temp_amgs && mv {params.outdir}/temp_amgs {params.samplelist}
+
+        python3 {config[scriptdir]}/scripts/dramv_amgs_table.py {params.workingdir} {params.samplelist} -v cpm > {output.amgs}
+
+        python3 {config[scriptdir]}/scripts/plotnine_heatmap.py {output.amgs} {params.amg_heatmap} \
+            -t "Heatmap of AMGs" -d "gene_description" -a "cpm"
+
+        rm -f {params.samplelist}
+        """
+
+# ---------------- iPHoP ----------------
+rule iphop:
+    threads: thr("iphop", 24)
+    conda: pjoin(ENV, "iphop.yaml")
+    input:
+        fasta = rules.mmseqs.output.renamed_DB_clu_rep_fasta
+    params:
+        outdir = pjoin(HOST_DIR)
+    log:
+        pjoin(HOST_DIR, "iphop.log")
+    output:
+        pjoin(HOST_DIR, "Host_prediction_to_genus_m75.csv")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        iphop --version >> {log} 2>&1
+
+        iphop predict --fa_file {input.fasta} --db_dir {config[iphopdb]} --min_score {config[iphop_min_score]} \
+            --out_dir {params.outdir} -t {threads} >> {log} 2>&1
+
+        rm -rf {params.outdir}/Wdir
+        """
+
+rule iphop_abund:
+    threads: thr("iphop_abund", 6)
+    conda: pjoin(ENV, "iphop.yaml")
+    input:
+        votu_table = rules.votu.output.votu,
+        host = rules.iphop.output
+    params:
+        outdir = pjoin(HOST_DIR, "tmp"),
+        host_table = pjoin(HOST_DIR, "Host_cpm_table.tsv")
+    log:
+        pjoin(HOST_DIR, "iphop.log")
+    output:
+        host_krona = pjoin(HOST_DIR, "Host.krona.html")
+    shell:
+        r"""
+        rm -rf {params.outdir}
+        mkdir -p {params.outdir}
+
+        python3 {config[scriptdir]}/scripts/host_cpm.py {input.votu_table} {input.host} > {params.host_table} 2>> {log}
+
+        python3 {config[scriptdir]}/scripts/format_iphop_and_votu_for_krona.py {input.votu_table} {input.host} {params.outdir} >> {log} 2>&1
+        ktImportText -o {output.host_krona} {params.outdir}/*.txt >> {log} 2>&1
+        """
+
+# ---------------- DIAMOND (only if enabled) ----------------
+if RUN_DIAMOND:
+
+    rule diamond:
+        threads: thr("diamond", 24)
+        conda: pjoin(ENV, "diamond.yaml")
+        input:
+            rules.genomad.output.proteins
+        output:
+            pjoin(SOUT, "diamond", "{sample}." + DIAMOND_DB_NAME + ".tsv")
+        log:
+            pjoin(SOUT, "diamond", "{sample}.diamond.log")
+        params:
+            outdir = pjoin(SOUT, "diamond"),
+            s = "{sample}",
+            tempdir = pjoin(OUT, "tmp_diamond", "{sample}_virome_diamond"),
+            dbname = DIAMOND_DB_NAME
+        shell:
+            r"""
+            rm -rf {params.outdir}
+            mkdir -p {params.outdir}
+            mkdir -p {params.tempdir}
+
+            diamond --version >> {log} 2>&1
+
+            diamond blastp --threads {threads} --max-target-seqs 2 -b 13 --tmpdir {params.tempdir} \
+                --query {input} --db {config[diamonddb]} \
+                --daa {params.outdir}/{params.s}.{params.dbname}.daa >> {log} 2>&1
+
+            diamond view --threads {threads} --outfmt 6 qseqid pident qcovhsp scovhsp length mismatch gapopen \
+                qstart qend sstart send evalue bitscore stitle \
+                -a {params.outdir}/{params.s}.{params.dbname}.daa -o {output} >> {log} 2>&1
+
+            sed -i '1s;^;qseqid\tpident\tqcovhsp\tscovhsp\tlength\tmismatch\tgapopen\tqstart\tqend\tsstart\tsend\tevalue\tbitscore\tstitle\n;' {output}
+            """
+
+

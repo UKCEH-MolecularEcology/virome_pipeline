@@ -1,0 +1,13 @@
+name: vp_liftoff_verse
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - liftoff
+  - verse
+  - samtools
+  - coreutils
+  - gawk
+  - sed
+  - grep
+  - pandas
+

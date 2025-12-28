@@ -1,6 +1,7 @@
 from os.path import join as pjoin
 import os
 import snakemake.utils as sm
+import sys
 
 ### cluster config
 scriptdir = config["scriptdir"] ## virome-pipeline repo/script directory
@@ -20,9 +21,23 @@ HOST_DIR = pjoin(OUT, "vOTU_Host_prediction_iphop")
 
 
 ## inputs
-SAMPLES = list(config["samples"].split())
-if SAMPLES is None:
-    sys.exit("Sample prefixes are needed")
+import pandas as pd
+
+meta_fp = config.get("metadata")
+if meta_fp is None:
+    sys.exit("Config key 'metadata' is required")
+
+meta = pd.read_csv(meta_fp, sep="\t")
+
+if "Sample" not in meta.columns:
+    sys.exit("Column 'Sample' not found in metadata file")
+
+SAMPLES = meta["Sample"].astype(str).tolist()
+
+if not SAMPLES:
+    sys.exit("No samples found in metadata")
+
+
 
 ################ RULES ###########################
 onerror:
@@ -781,7 +796,7 @@ rule all:
            CHECKVALL = expand(rules.checkv_filter.output, sample=SAMPLES),
            VERSEGALL = expand(rules.abund_genomad.output.readcounts_virus, sample=SAMPLES),
            BBTOOLS_DEDUPEALL = rules.bbtools_dedupe.output.unique_seqs,
-	   MMSEQSALL = rules.mmseqs.output.DB_clu_rep_fasta,
+           MMSEQSALL = rules.mmseqs.output.DB_clu_rep_fasta,
            VOTUALL = rules.votu.output.votu,
            IPHOPALL = rules.iphop.output if config["run_iphop"] else [],
            DIAMALL = expand(rules.diamond.output, sample=SAMPLES) if config["run_diamond"] else [],

@@ -1,0 +1,7 @@
+name: vp_checkv
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - checkv
+  - coreutils
+

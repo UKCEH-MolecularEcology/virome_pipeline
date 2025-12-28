@@ -1,0 +1,9 @@
+name: vp_seqtk
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - seqtk
+  - coreutils
+  - gawk
+  - sed
+  - grep
+

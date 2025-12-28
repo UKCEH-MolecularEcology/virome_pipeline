@@ -1,0 +1,9 @@
+name: vp_genomad
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - genomad
+  - coreutils
+  - sed
+  - grep
+

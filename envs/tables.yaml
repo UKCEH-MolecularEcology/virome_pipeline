@@ -1,0 +1,14 @@
+name: vp_tables
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - plotnine
+  - matplotlib
+  - biom-format
+  - coreutils
+  - gawk
+  - sed
+  - grep
+

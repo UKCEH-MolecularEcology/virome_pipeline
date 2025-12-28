@@ -1,0 +1,13 @@
+name: vp_verse
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - verse
+  - samtools
+  - pandas
+  - numpy
+  - coreutils
+  - gawk
+  - sed
+  - grep
+

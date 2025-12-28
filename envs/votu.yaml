@@ -1,0 +1,13 @@
+name: vp_votu
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - biom-format
+  - krona
+  - coreutils
+  - gawk
+  - sed
+  - grep
+

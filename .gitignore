@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+led / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -109,6 +109,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.snakemake
+.snakemake/**
 
 # Spyder project settings
 .spyderproject
@@ -128,11 +130,43 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# R
-.Rhistory
+# Folders
+results
+results/**
+test/**
+test
+status/**
+status
+localDB*
+**localDB**
 
-# mounted drives
-.__*
-
-# mac stuff
-.DS_Store
+# Files
+*_orig*
+*.done
+*free.csv*
+*path_test.txt
+phylodb
+phylodb**
+*reference_bins*
+*reference_bins/**
+phylodb/**
+reference_bins/*
+references_bins/
+localDB**
+localDB/**
+*localDB*
+**local**
+localDB/*
+*.Rhistory*
+Rhistory**
+**.Rhistory**
+*localDB/.ncbirc*
+**locablDB*
+coverages**
+coverages/*
+*eggnog
+eggnog/*
+phosphate_tpm_out/*
+phosphate_tpm_out**
+rsn_mag_kegg**
+rsn_mag_kegg/*

@@ -1,0 +1,6 @@
+name: vp_bbmap
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - bbmap
+  - coreutils
+

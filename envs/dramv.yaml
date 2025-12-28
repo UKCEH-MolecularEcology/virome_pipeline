@@ -1,0 +1,11 @@
+name: vp_dramv
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - dram
+  - mmseqs2
+  - prodigal
+  - hmmer
+  - diamond
+  - coreutils
+
