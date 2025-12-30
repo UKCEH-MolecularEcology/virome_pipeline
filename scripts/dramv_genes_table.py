@@ -43,16 +43,39 @@ def read_abund(abundfile, annotable, value, sample):
 
 def read_annotate(annofile, column, sample):
     a = pd.read_csv(annofile, sep='\t')
+
+    # normalise gene column
     a = a.rename(columns={"Unnamed: 0": "gene"})
-    ## remove rows where column values are empty https://stackoverflow.com/a/46764265
-    a = a[(a[column].values == '').sum(axis=1) < len(column)]
-    a = a.dropna(subset=column, thresh=len(column))
-    ## get just the relevant columns
-    column = ['gene'] + column
-    a = a[column]
-    ## add sample column
-    a['sample'] = sample
-    return(a)
+
+    # ensure requested columns exist
+    missing = [c for c in column if c not in a.columns]
+    if missing:
+        print(f"[WARN] {sample}: missing columns {missing} in {annofile}; returning empty table.")
+        return pd.DataFrame(columns=["gene"] + list(column) + ["sample"])
+
+    # remove rows where all requested columns are empty / NA
+    a = a[(a[list(column)].fillna('').values == '').sum(axis=1) < len(column)]
+
+    # keep only relevant columns
+    a = a[["gene"] + list(column)]
+
+    # add sample column
+    a["sample"] = sample
+
+    return a
+
+#def read_annotate(annofile, column, sample):
+#    a = pd.read_csv(annofile, sep='\t')
+#    a = a.rename(columns={"Unnamed: 0": "gene"})
+#    ## remove rows where column values are empty https://stackoverflow.com/a/46764265
+#    a = a[(a[column].values == '').sum(axis=1) < len(column)]
+#    a = a.dropna(subset=column, thresh=len(column))
+#    ## get just the relevant columns
+#    column = ['gene'] + column
+#    a = a[column]
+#    ## add sample column
+#    a['sample'] = sample
+#    return(a)
 
 ## read in samples
 with open(args.samplelist, 'r') as f:
