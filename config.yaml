@@ -67,6 +67,8 @@ samples:
   - U51_2021
 
 metadata: "metadata.tsv"
+exclude_samples:
+  - D53_2022
 
 dram_db_dir: /prj/DECODE/rsn_viruses/mvip/00_DATABASES
 

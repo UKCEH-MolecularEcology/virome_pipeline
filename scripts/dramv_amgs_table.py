@@ -23,45 +23,93 @@ args = parser.parse_args()
 
 if args.debug: print(args, file=sys.stderr)
 
+
 def read_abund(abundfile, amgtable, value, sample):
     """abundfile: abundance filename - output of verse
-       annotable: corresponding dramv annotations table from read_annotate
+       amgtable: corresponding DRAM-v AMG table from read_amg
        value: which value column from abundfile to include
        sample: sample name associated with file
     """
+    # If AMG table is empty, nothing to merge -> return empty table with expected columns
+    if amgtable is None or amgtable.empty:
+        return pd.DataFrame(columns=list(amgtable.columns) + [value] if amgtable is not None else
+                            ['gene', 'gene_id', 'gene_description', 'sample', value])
+
+    # Abundance file missing/empty -> return empty
+    if (not os.path.exists(abundfile)) or (os.path.getsize(abundfile) == 0):
+        print(f"[WARN] {sample}: missing/empty abundance file: {abundfile}; returning empty table.", file=sys.stderr)
+        return pd.DataFrame(columns=list(amgtable.columns) + [value])
+
     a = pd.read_csv(abundfile, sep='\t')
-    a = a.merge(amgtable, how='inner', left_on = 'gene', right_on = 'gene')
-    a = a[list(amgtable.columns) + [value]]
-    return(a)
+
+    # Ensure required merge and value columns exist
+    if 'gene' not in a.columns:
+        print(f"[WARN] {sample}: abundance file has no 'gene' column: {abundfile}; returning empty table.", file=sys.stderr)
+        return pd.DataFrame(columns=list(amgtable.columns) + [value])
+
+    if value not in a.columns:
+        print(f"[WARN] {sample}: abundance file missing value column '{value}': {abundfile}; returning empty table.", file=sys.stderr)
+        return pd.DataFrame(columns=list(amgtable.columns) + [value])
+
+    # Inner merge keeps only genes that are AMGs for that sample
+    out = a.merge(amgtable, how='inner', on='gene')
+
+    if out.empty:
+        return pd.DataFrame(columns=list(amgtable.columns) + [value])
+
+    out = out[list(amgtable.columns) + [value]]
+    return out
 
 
 def read_amg(amgfile, sample):
+    cols = ['gene', 'gene_id', 'gene_description']
+
+    # Missing/empty file -> return empty with expected schema
+    if (not os.path.exists(amgfile)) or (os.path.getsize(amgfile) == 0):
+        print(f"[WARN] {sample}: missing/empty AMG file: {amgfile}; returning empty table.", file=sys.stderr)
+        return pd.DataFrame(columns=cols + ['sample'])
+
     a = pd.read_csv(amgfile, sep='\t')
-    ## get just the relevant columns
-    column = ['gene', 'gene_id', 'gene_description']
-    a = a[column]
-    ## add sample column
+
+    # Missing required columns -> return empty with expected schema
+    missing = [c for c in cols if c not in a.columns]
+    if missing:
+        print(f"[WARN] {sample}: missing columns {missing} in {amgfile}; returning empty table.", file=sys.stderr)
+        return pd.DataFrame(columns=cols + ['sample'])
+
+    a = a[cols].copy()
     a['sample'] = sample
-    return(a)
+    return a
 
-## read in samples
+
+# ---- read in samples (ignore blanks) ----
 with open(args.samplelist, 'r') as f:
-    samples = f.read().splitlines()
+    samples = [s.strip() for s in f if s.strip()]
 
-amgdf = read_amg(os.path.join(args.pipelinedir, samples[0], args.dramv, "dramv-distill", "amg_summary.tsv"), samples[0])
-
-
-## make list of sample abundance files and amg summary files
+# ---- make lists of sample abundance files and amg summary files ----
 abundlist = {sample: os.path.join(args.pipelinedir, sample, args.verse, sample + args.suffix) for sample in samples}
-amglist = {sample: os.path.join(args.pipelinedir, sample, args.dramv, "dramv-distill", "amg_summary.tsv") for sample in samples}
+amglist   = {sample: os.path.join(args.pipelinedir, sample, args.dramv, "dramv-distill", "amg_summary.tsv") for sample in samples}
 
-## read in amg and abund files and make individual sample tables
+# ---- read in AMG and abundance files ----
 amgtabs = {sample: read_amg(amglist[sample], sample) for sample in samples}
 abundtabs = [read_abund(abundlist[sample], amgtabs[sample], args.value, sample) for sample in samples]
 
-## concatenate abundance tables
-longtab = pd.concat(abundtabs)
+# ---- concatenate abundance tables ----
+# If everything is empty, create a correctly-shaped empty long table
+if len(abundtabs) == 0 or all(df.empty for df in abundtabs):
+    longtab = pd.DataFrame(columns=['gene_id', 'gene_description', 'sample', args.value])
+else:
+    longtab = pd.concat(abundtabs, ignore_index=True)
 
-## pivot/cast table into wide gene_id table
-finaltab = pd.pivot_table(longtab, values = args.value, index = ['gene_id', 'gene_description'], columns = 'sample', fill_value=0, aggfunc='sum')
-finaltab.to_csv(sys.stdout, sep = "\t")
+# ---- pivot to wide ----
+finaltab = pd.pivot_table(
+    longtab,
+    values=args.value,
+    index=['gene_id', 'gene_description'],
+    columns='sample',
+    fill_value=0,
+    aggfunc='sum'
+)
+
+finaltab.to_csv(sys.stdout, sep="\t")
+

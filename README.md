@@ -150,7 +150,7 @@ cd virome-pipeline
 - Easily portable to other HPC systems using Snakemake
 - Designed for large-scale viral metagenomic datasets
 - Compatible with containerised or conda-based environments
-
+- From *RSN analysis*, sample `D53_2022` removed due to persistent errors
 ---
 
 ## References

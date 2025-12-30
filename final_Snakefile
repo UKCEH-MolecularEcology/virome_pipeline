@@ -55,6 +55,7 @@ def thr(name, default=None):
         default = DEFAULT_THREADS
     return int(T.get(name, default))
 
+
 # --------- inputs (metadata-driven samples) ----------
 meta_fp = config.get("metadata")
 if meta_fp is None:
@@ -64,9 +65,17 @@ meta = pd.read_csv(meta_fp, sep="\t")
 if "Sample" not in meta.columns:
     sys.exit("Column 'Sample' not found in metadata file")
 
-SAMPLES = meta["Sample"].astype(str).tolist()
+# optional exclusion list
+EXCLUDE = set(map(str, config.get("exclude_samples", [])))
+
+SAMPLES = [
+    s for s in meta["Sample"].astype(str).tolist()
+    if s not in EXCLUDE
+]
+
 if not SAMPLES:
-    sys.exit("No samples found in metadata")
+    sys.exit("No samples found in metadata after exclusions")
+
 
 # --------- optional features ----------
 RUN_DIAMOND = as_bool(config.get("run_diamond", False))
