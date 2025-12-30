@@ -25,7 +25,7 @@ checkvdb: /prj/DECODE/rsn_viruses/mvip/00_DATABASES/checkv-db-v1.5
 checkv_q: all
 
 # min contig length for dramv and vOTU clustering
-vs_min_length: 5000
+vs_min_length: 1000
 
 ## amgs
 # run virsorter2 to filter contigs (this removes a lot)

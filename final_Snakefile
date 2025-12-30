@@ -15,7 +15,7 @@ ENV = "envs"
 
 # --------- config basics ----------
 scriptdir = config["scriptdir"]      # repo/script directory
-workdir = config["workdir"]          # working directory (FIXED: was invalid syntax)
+workdir: config["workdir"]          # working directory (FIXED: was invalid syntax)
 
 OUT = config["outdir"]
 SOUT = pjoin(OUT, "{sample}")
