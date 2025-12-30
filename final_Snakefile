@@ -667,7 +667,7 @@ rule amg_tables:
 
 # ---------------- iPHoP ----------------
 rule iphop:
-    threads: thr("iphop", 24)
+    threads: thr("iphop", 64)
     conda: pjoin(ENV, "iphop.yaml")
     input:
         fasta = rules.mmseqs.output.renamed_DB_clu_rep_fasta
