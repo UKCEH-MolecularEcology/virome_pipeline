@@ -104,7 +104,7 @@ threads:
   gene_tables: 6
   amg_tables: 6
 
-  iphop: 24
-  iphop_abund: 6
+  iphop: 64
+  iphop_abund: 24
 
   diamond: 24
