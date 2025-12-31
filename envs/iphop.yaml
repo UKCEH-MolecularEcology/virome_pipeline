@@ -1,9 +1,7 @@
 name: vp_iphop
 channels: [conda-forge, bioconda, defaults]
 dependencies:
-  - python=3.10
-  - pip
+  - python=3.8
+  - iphop>=1.4.1
   - coreutils
-  - pip:
-      - iphop
 

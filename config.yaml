@@ -41,7 +41,7 @@ run_iphop: yes
 # Choose min confidence score. Value between 75 and 100. Default is 90.
 iphop_min_score: 90
 # location of iphop database
-iphopdb: /prj/DECODE/rsn_viruses/mvip/00_DATABASES/iphop_db/  # /hpcdata/bio_data/iphop/Sept_2021_pub_rw/
+iphopdb: /prj/DECODE/rsn_viruses/mvip/00_DATABASES/iphop_db/Jun_2025_pub_rw/  # /hpcdata/bio_data/iphop/Sept_2021_pub_rw/
 
 # diamond db to annotate genes for eventual pathway inference - we use nr
 # yes/no
