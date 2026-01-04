@@ -103,7 +103,7 @@ rule all:
         BBTOOLS_DEDUPE  = pjoin(VOTU_CL_DIR, "bbtools_dedupe", "unique_seqs.fasta"),
         MMSEQSALL       = pjoin(VOTU_CL_DIR, "mmseqs", "representative_seqs.fasta"),
         VOTUALL         = pjoin(VOTU_DIR, "vOTU_table_cpm.tsv"),
-        IPHOPALL        = pjoin(HOST_DIR, "Host_prediction_to_genus_m75.csv") if RUN_IPHOP else [],
+        IPHOPALL        = pjoin(HOST_DIR, "Host_prediction_to_genus_m90.csv") if RUN_IPHOP else [],
         DIAMALL         = expand(pjoin(SOUT, "diamond", "{sample}." + DIAMOND_DB_NAME + ".tsv"), sample=SAMPLES) if RUN_DIAMOND else [],
         DRAMVALL        = expand(pjoin(SOUT, "dramv", "dramv-annotate", "genes.gff"), sample=SAMPLES),
         VS4DRAMVALL     = expand(pjoin(SOUT, "amgs/vs2/for-dramv/final-viral-combined-for-dramv.fa"), sample=SAMPLES) if RUN_AMGS else [],
@@ -676,7 +676,7 @@ rule iphop:
     log:
         pjoin(HOST_DIR, "iphop.log")
     output:
-        pjoin(HOST_DIR, "Host_prediction_to_genus_m75.csv")
+        pjoin(HOST_DIR, "Host_prediction_to_genus_m90.csv")
     shell:
         r"""
         rm -rf {params.outdir}
